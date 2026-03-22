@@ -1,9 +1,13 @@
 package ai.openclaw.app.ui.chat
 
 import android.Manifest
+import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -39,6 +43,7 @@ class SpeechInputHelper(
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
     // Exposed state
     private val _isListening = MutableStateFlow(false)
@@ -54,9 +59,72 @@ class SpeechInputHelper(
     private var silenceJob: Job? = null
     private var restartJob: Job? = null
     private var stopRequested = false
+    private var scoActive = false
+    private var scoReady = false
 
     // Track last transcript string to detect real changes vs noise callbacks
     private var lastTranscriptForSilenceCheck = ""
+
+    // ── Bluetooth SCO: route mic through BT headset when connected ────────
+
+    /**
+     * BroadcastReceiver that waits for SCO audio to connect before starting
+     * the SpeechRecognizer. This ensures the BT headset mic is active.
+     */
+    private val scoReceiver = object : BroadcastReceiver() {
+        override fun onReceive(ctx: Context?, intent: Intent?) {
+            val state = intent?.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_STATE, -1)
+            if (state == AudioManager.SCO_AUDIO_STATE_CONNECTED) {
+                scoReady = true
+                // SCO connected — now start recognition on the BT mic.
+                mainHandler.post { if (!stopRequested) startSession() }
+            }
+        }
+    }
+
+    /** Check if a Bluetooth audio device (headset/earbuds) is connected. */
+    @Suppress("MissingPermission")
+    private fun isBluetoothHeadsetConnected(): Boolean {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT)
+            != PackageManager.PERMISSION_GRANTED) return false
+        val btManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        val adapter = btManager?.adapter ?: return false
+        // Check if SCO is available (headset profile connected).
+        return audioManager.isBluetoothScoAvailableOffCall
+    }
+
+    /**
+     * Start Bluetooth SCO if a headset is connected.
+     * Returns true if we need to wait for the SCO receiver before starting recognition.
+     */
+    private fun startBluetoothSco(): Boolean {
+        if (!isBluetoothHeadsetConnected()) return false
+        try {
+            context.registerReceiver(
+                scoReceiver,
+                IntentFilter(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED)
+            )
+            @Suppress("DEPRECATION")
+            audioManager.startBluetoothSco()
+            audioManager.isBluetoothScoOn = true
+            scoActive = true
+            return true // Wait for scoReceiver to fire before starting recognition.
+        } catch (_: Throwable) {
+            return false
+        }
+    }
+
+    private fun stopBluetoothSco() {
+        if (!scoActive) return
+        try {
+            audioManager.isBluetoothScoOn = false
+            @Suppress("DEPRECATION")
+            audioManager.stopBluetoothSco()
+            context.unregisterReceiver(scoReceiver)
+        } catch (_: Throwable) { /* receiver may not be registered */ }
+        scoActive = false
+        scoReady = false
+    }
 
     fun hasMicPermission(): Boolean =
         ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
@@ -66,13 +134,20 @@ class SpeechInputHelper(
     fun start() {
         if (_isListening.value) return
         stopRequested = false
+        scoReady = false
         mainHandler.post {
             try {
                 recognizer?.destroy()
                 recognizer = SpeechRecognizer.createSpeechRecognizer(context).also {
                     it.setRecognitionListener(recognitionListener)
                 }
-                startSession()
+                // If BT headset is connected, start SCO and wait for callback to begin recognition.
+                // Otherwise start immediately on the built-in mic.
+                val waitingForSco = startBluetoothSco()
+                if (!waitingForSco) {
+                    startSession()
+                }
+                // If waitingForSco, the scoReceiver will call startSession() when ready.
             } catch (_: Throwable) {
                 _isListening.value = false
             }
@@ -96,6 +171,7 @@ class SpeechInputHelper(
             recognizer?.cancel()
             recognizer?.destroy()
             recognizer = null
+            stopBluetoothSco()
         }
         return _transcript.value
     }
