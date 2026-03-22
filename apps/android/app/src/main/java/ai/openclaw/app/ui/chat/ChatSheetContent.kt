@@ -80,6 +80,9 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val isSpeaking by ttsHelper.speaking.collectAsState()
 
   // Auto-read is now handled inside ChatComposer via the lastSendWasAutoSilence flag.
+  // Track message count at the time of send so auto-speak can identify the NEW response.
+  val messageCountAtSend = remember { androidx.compose.runtime.mutableIntStateOf(0) }
+
   // When silence-timeout auto-send fires and the run finishes, ChatComposer calls onAutoSpeak,
   // which speaks the latest assistant message here in the parent (where messages are accessible).
   // ─────────────────────────────────────────────────────────────────────────
@@ -128,7 +131,9 @@ fun ChatSheetContent(viewModel: MainViewModel) {
       pendingToolCalls = pendingToolCalls,
       streamingAssistantText = streamingAssistantText,
       healthOk = healthOk,
-      onSpeakMessage = { text -> ttsHelper.speak(text) },
+      onSpeakMessage = { text ->
+        if (isSpeaking) ttsHelper.stop() else ttsHelper.speak(text)
+      },
       isSpeaking = isSpeaking,
       onStopSpeaking = { ttsHelper.stop() },
       modifier = Modifier.weight(1f, fill = true),
@@ -159,14 +164,22 @@ fun ChatSheetContent(viewModel: MainViewModel) {
                 base64 = att.base64,
               )
             }
+          messageCountAtSend.intValue = messages.size
           viewModel.sendChat(message = text, thinking = thinkingLevel, attachments = outgoing)
           attachments.clear()
         },
-        // Auto-speak the latest assistant message after a silence-timeout send completes.
+        // Auto-speak: find the latest assistant message that arrived AFTER we sent.
         onAutoSpeak = {
-          val latest = messages.lastOrNull { it.role.trim().lowercase() == "assistant" }
-          if (latest != null) {
-            val text = latest.content
+          val countAtSend = messageCountAtSend.intValue
+          // Look only at messages added after the send
+          val newMessages = if (countAtSend < messages.size) {
+            messages.subList(countAtSend, messages.size)
+          } else {
+            emptyList()
+          }
+          val latestAssistant = newMessages.lastOrNull { it.role.trim().lowercase() == "assistant" }
+          if (latestAssistant != null) {
+            val text = latestAssistant.content
               .filter { it.type == "text" }
               .mapNotNull { it.text }
               .joinToString("\n")
