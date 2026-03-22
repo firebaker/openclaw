@@ -1,3 +1,5 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
@@ -43,10 +45,9 @@ const tlonSetupWizardProxy = createTlonSetupWizardBase({
 
 const tlonConfigAdapter = createHybridChannelConfigAdapter({
   sectionKey: TLON_CHANNEL_ID,
-  listAccountIds: (cfg: OpenClawConfig) => listTlonAccountIds(cfg),
-  resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
-    resolveTlonAccount(cfg, accountId ?? undefined),
-  defaultAccountId: () => "default",
+  listAccountIds: listTlonAccountIds,
+  resolveAccount: resolveTlonAccount,
+  defaultAccountId: () => DEFAULT_ACCOUNT_ID,
   clearBaseFields: ["ship", "code", "url", "name"],
   preserveSectionOnDefaultDelete: true,
   resolveAllowFrom: (account) => account.dmAllowlist,
@@ -79,14 +80,15 @@ export const tlonPlugin: ChannelPlugin = {
   config: {
     ...tlonConfigAdapter,
     isConfigured: (account) => account.configured,
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      ship: account.ship,
-      url: account.url,
-    }),
+    describeAccount: (account) =>
+      describeAccountSnapshot({
+        account,
+        configured: account.configured,
+        extra: {
+          ship: account.ship,
+          url: account.url,
+        },
+      }),
   },
   messaging: {
     normalizeTarget: (target) => {

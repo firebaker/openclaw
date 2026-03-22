@@ -8,6 +8,7 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "../../routing/session-key.js";
+import type { ChannelAccountSnapshot } from "./types.core.js";
 
 export function createAccountListHelpers(
   channelKey: string,
@@ -123,6 +124,7 @@ export function mergeAccountConfig<TConfig extends Record<string, unknown>>(para
   channelConfig: TConfig | undefined;
   accountConfig: Partial<TConfig> | undefined;
   omitKeys?: string[];
+  nestedObjectKeys?: string[];
 }): TConfig {
   const omitKeys = new Set(["accounts", ...(params.omitKeys ?? [])]);
   const base = Object.fromEntries(
@@ -130,10 +132,28 @@ export function mergeAccountConfig<TConfig extends Record<string, unknown>>(para
       ([key]) => !omitKeys.has(key),
     ),
   ) as TConfig;
-  return {
+  const merged = {
     ...base,
     ...params.accountConfig,
   };
+  for (const key of params.nestedObjectKeys ?? []) {
+    const baseValue = base[key as keyof TConfig];
+    const accountValue = params.accountConfig?.[key as keyof TConfig];
+    if (
+      typeof baseValue === "object" &&
+      baseValue != null &&
+      !Array.isArray(baseValue) &&
+      typeof accountValue === "object" &&
+      accountValue != null &&
+      !Array.isArray(accountValue)
+    ) {
+      (merged as Record<string, unknown>)[key] = {
+        ...(baseValue as Record<string, unknown>),
+        ...(accountValue as Record<string, unknown>),
+      };
+    }
+  }
+  return merged;
 }
 
 export function resolveMergedAccountConfig<TConfig extends Record<string, unknown>>(params: {
@@ -142,6 +162,7 @@ export function resolveMergedAccountConfig<TConfig extends Record<string, unknow
   accountId: string;
   omitKeys?: string[];
   normalizeAccountId?: (accountId: string) => string;
+  nestedObjectKeys?: string[];
 }): TConfig {
   const accountConfig = params.normalizeAccountId
     ? resolveNormalizedAccountEntry(params.accounts, params.accountId, params.normalizeAccountId)
@@ -150,5 +171,29 @@ export function resolveMergedAccountConfig<TConfig extends Record<string, unknow
     channelConfig: params.channelConfig,
     accountConfig,
     omitKeys: params.omitKeys,
+    nestedObjectKeys: params.nestedObjectKeys,
   });
+}
+
+export function describeAccountSnapshot<
+  TAccount extends {
+    accountId?: string | null;
+    enabled?: boolean | null;
+    name?: string | null | undefined;
+  },
+>(params: {
+  account: TAccount;
+  configured?: boolean | undefined;
+  extra?: Record<string, unknown> | undefined;
+}): ChannelAccountSnapshot {
+  return {
+    accountId: String(params.account.accountId ?? DEFAULT_ACCOUNT_ID),
+    name:
+      typeof params.account.name === "string" && params.account.name.trim()
+        ? params.account.name
+        : undefined,
+    enabled: params.account.enabled !== false,
+    configured: params.configured,
+    ...params.extra,
+  };
 }

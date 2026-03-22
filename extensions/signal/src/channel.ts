@@ -287,7 +287,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   actions: signalMessageActions,
   allowlist: buildDmGroupAccountAllowlistAdapter({
     channelId: "signal",
-    resolveAccount: ({ cfg, accountId }) => resolveSignalAccount({ cfg, accountId }),
+    resolveAccount: resolveSignalAccount,
     normalize: ({ cfg, accountId, values }) =>
       signalConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
     resolveDmAllowFrom: (account) => account.config.allowFrom,
@@ -383,10 +383,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       (probe as SignalProbe | undefined)?.version
         ? [{ text: `Signal daemon: ${(probe as SignalProbe).version}` }]
         : [],
-    buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      ...buildBaseAccountStatusSnapshot({ account, runtime, probe }),
-      baseUrl: account.baseUrl,
-    }),
+    buildAccountSnapshot: ({ account, runtime, probe }) =>
+      buildBaseAccountStatusSnapshot({ account, runtime, probe }, { baseUrl: account.baseUrl }),
   },
   gateway: {
     startAccount: async (ctx) => {

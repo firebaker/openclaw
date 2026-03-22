@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import {
   createAccountListHelpers,
+  describeAccountSnapshot,
   listCombinedAccountIds,
   mergeAccountConfig,
   resolveListedDefaultAccountId,
@@ -194,6 +195,43 @@ describe("resolveListedDefaultAccountId", () => {
   });
 });
 
+describe("describeAccountSnapshot", () => {
+  it("builds the standard snapshot shape with optional extras", () => {
+    expect(
+      describeAccountSnapshot({
+        account: {
+          accountId: "work",
+          name: "Work",
+          enabled: true,
+        },
+        configured: true,
+        extra: {
+          tokenSource: "config",
+        },
+      }),
+    ).toEqual({
+      accountId: "work",
+      name: "Work",
+      enabled: true,
+      configured: true,
+      tokenSource: "config",
+    });
+  });
+
+  it("normalizes missing identity fields to the shared defaults", () => {
+    expect(
+      describeAccountSnapshot({
+        account: {},
+      }),
+    ).toEqual({
+      accountId: "default",
+      name: undefined,
+      enabled: true,
+      configured: undefined,
+    });
+  });
+});
+
 describe("mergeAccountConfig", () => {
   it("drops accounts from the base config before merging", () => {
     const merged = mergeAccountConfig<{
@@ -237,6 +275,31 @@ describe("mergeAccountConfig", () => {
     expect(merged).toEqual({
       enabled: true,
       name: "Work",
+    });
+  });
+
+  it("deep-merges selected nested object keys", () => {
+    const merged = mergeAccountConfig<{
+      commands?: { native?: boolean; callbackPath?: string };
+    }>({
+      channelConfig: {
+        commands: {
+          native: true,
+        },
+      },
+      accountConfig: {
+        commands: {
+          callbackPath: "/work",
+        },
+      },
+      nestedObjectKeys: ["commands"],
+    });
+
+    expect(merged).toEqual({
+      commands: {
+        native: true,
+        callbackPath: "/work",
+      },
     });
   });
 });
@@ -284,6 +347,34 @@ describe("resolveMergedAccountConfig", () => {
     expect(merged).toEqual({
       enabled: true,
       name: "Router",
+    });
+  });
+
+  it("deep-merges selected nested object keys after resolving the account", () => {
+    const merged = resolveMergedAccountConfig<{
+      nickserv?: { service?: string; registerEmail?: string };
+    }>({
+      channelConfig: {
+        nickserv: {
+          service: "NickServ",
+        },
+      },
+      accounts: {
+        work: {
+          nickserv: {
+            registerEmail: "work@example.com",
+          },
+        },
+      },
+      accountId: "work",
+      nestedObjectKeys: ["nickserv"],
+    });
+
+    expect(merged).toEqual({
+      nickserv: {
+        service: "NickServ",
+        registerEmail: "work@example.com",
+      },
     });
   });
 });
