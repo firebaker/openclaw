@@ -30,6 +30,12 @@ class TtsHelper(context: Context) {
 
     private val _ready = MutableStateFlow(false)
 
+    /** Tracks how much of the streaming text we've already sent to TTS. */
+    private var streamSpokenIndex = 0
+
+    /** Regex for clause/sentence boundaries: . ! ? , : ; followed by whitespace. */
+    private val clauseBoundary = Regex("""[.!?,;:]\s""")
+
     private val engine: TextToSpeech = TextToSpeech(context) { status ->
         _ready.value = (status == TextToSpeech.SUCCESS)
         if (_ready.value) {
@@ -38,12 +44,19 @@ class TtsHelper(context: Context) {
     }
 
     init {
-        @Suppress("OVERRIDE_DEPRECATION")
-        engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?)  { _speaking.value = true  }
-            override fun onDone(utteranceId: String?)   { _speaking.value = false }
-            override fun onError(utteranceId: String?)  { _speaking.value = false }
-        })
+        engine.setOnUtteranceProgressListener(
+            @Suppress("OVERRIDE_DEPRECATION")
+            object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) { _speaking.value = true }
+                override fun onDone(utteranceId: String?)  {
+                    // Only clear speaking if nothing else is queued.
+                    if (!engine.isSpeaking) _speaking.value = false
+                }
+                override fun onError(utteranceId: String?) {
+                    if (!engine.isSpeaking) _speaking.value = false
+                }
+            }
+        )
     }
 
     /**
@@ -57,9 +70,69 @@ class TtsHelper(context: Context) {
         engine.speak(plain, TextToSpeech.QUEUE_FLUSH, null, "tts-${System.currentTimeMillis()}")
     }
 
+    // ── Streaming TTS ─────────────────────────────────────────────────────
+
+    /**
+     * Reset streaming state. Call when a new response stream begins.
+     */
+    fun streamReset() {
+        streamSpokenIndex = 0
+    }
+
+    /**
+     * Feed the current streaming partial text. Finds any new clause/sentence
+     * boundaries since the last call and queues completed clauses for speech.
+     * Uses QUEUE_ADD so clauses chain without gaps.
+     */
+    fun streamSpeak(partialText: String) {
+        if (!_ready.value) return
+        val plain = stripMarkdown(partialText)
+        if (plain.length <= streamSpokenIndex) return
+
+        val unspoken = plain.substring(streamSpokenIndex)
+        var lastBoundary = -1
+
+        // Find the last clause boundary in the unspoken portion.
+        val match = clauseBoundary.findAll(unspoken).lastOrNull()
+        if (match != null) {
+            // Include the punctuation character, not the trailing space.
+            lastBoundary = match.range.first + 1
+        }
+
+        if (lastBoundary > 0) {
+            val chunk = unspoken.substring(0, lastBoundary).trim()
+            if (chunk.isNotBlank()) {
+                val mode = if (streamSpokenIndex == 0)
+                    TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
+                engine.speak(chunk, mode, null, "stream-${System.currentTimeMillis()}")
+            }
+            streamSpokenIndex += lastBoundary
+        }
+    }
+
+    /**
+     * Flush any remaining text after the stream completes.
+     * Speaks whatever hasn't been spoken yet.
+     */
+    fun streamFlush(fullText: String) {
+        if (!_ready.value) return
+        val plain = stripMarkdown(fullText)
+        if (plain.length <= streamSpokenIndex) return
+        val remainder = plain.substring(streamSpokenIndex).trim()
+        if (remainder.isNotBlank()) {
+            val mode = if (streamSpokenIndex == 0)
+                TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
+            engine.speak(remainder, mode, null, "stream-flush-${System.currentTimeMillis()}")
+        }
+        streamSpokenIndex = plain.length
+    }
+
+    // ── Control ───────────────────────────────────────────────────────────
+
     /** Stop any in-progress speech immediately. */
     fun stop() {
         engine.stop()
+        streamSpokenIndex = 0
         _speaking.value = false
     }
 

@@ -80,13 +80,27 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val isSpeaking by ttsHelper.speaking.collectAsState()
 
   // Auto-speak: driven by the composer setting autoSpeakNextResponse when silence-timeout sends.
-  // We watch the messages list here (where the data lives) rather than relying on pendingRunCount timing.
+  // Uses streaming TTS — speaks clause-by-clause as the response streams in, rather than
+  // waiting for the full response. Stop anytime via the mic/speaker button.
   val autoSpeakNextResponse = remember { androidx.compose.runtime.mutableStateOf(false) }
-  val lastSpokenMessageCount = remember { androidx.compose.runtime.mutableIntStateOf(messages.size) }
+  val streamSpeakActive = remember { androidx.compose.runtime.mutableStateOf(false) }
 
-  // When a new assistant message arrives and autoSpeakNextResponse is set, speak it.
-  LaunchedEffect(messages.size) {
-    if (autoSpeakNextResponse.value && messages.size > lastSpokenMessageCount.intValue) {
+  // When autoSpeakNextResponse is set and streaming text starts arriving, begin streaming TTS.
+  LaunchedEffect(streamingAssistantText, autoSpeakNextResponse.value) {
+    if (autoSpeakNextResponse.value && !streamingAssistantText.isNullOrBlank()) {
+      if (!streamSpeakActive.value) {
+        // First chunk — reset and start streaming.
+        ttsHelper.streamReset()
+        streamSpeakActive.value = true
+      }
+      ttsHelper.streamSpeak(streamingAssistantText!!)
+    }
+  }
+
+  // When streaming ends (text goes null/blank) and we were actively streaming, flush remainder.
+  LaunchedEffect(streamingAssistantText) {
+    if (streamSpeakActive.value && streamingAssistantText.isNullOrBlank()) {
+      // Stream finished — flush any remaining unspoken text from the final message.
       val latest = messages.lastOrNull()
       if (latest != null && latest.role.trim().lowercase() == "assistant") {
         val text = latest.content
@@ -94,16 +108,14 @@ fun ChatSheetContent(viewModel: MainViewModel) {
           .mapNotNull { it.text }
           .joinToString("\n")
         if (text.isNotBlank()) {
-          ttsHelper.speak(text)
-          autoSpeakNextResponse.value = false
+          ttsHelper.streamFlush(text)
         }
       }
+      streamSpeakActive.value = false
+      autoSpeakNextResponse.value = false
     }
-    lastSpokenMessageCount.intValue = messages.size
   }
 
-  // When silence-timeout auto-send fires and the run finishes, ChatComposer calls onAutoSpeak,
-  // which speaks the latest assistant message here in the parent (where messages are accessible).
   // ─────────────────────────────────────────────────────────────────────────
 
   val attachments = remember { mutableStateListOf<PendingImageAttachment>() }
