@@ -1,5 +1,8 @@
 package ai.openclaw.app.ui.chat
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -19,6 +22,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
@@ -33,14 +38,18 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,6 +62,7 @@ import ai.openclaw.app.ui.mobileBorderStrong
 import ai.openclaw.app.ui.mobileCallout
 import ai.openclaw.app.ui.mobileCaption1
 import ai.openclaw.app.ui.mobileCardSurface
+import ai.openclaw.app.ui.mobileDanger
 import ai.openclaw.app.ui.mobileHeadline
 import ai.openclaw.app.ui.mobileSurface
 import ai.openclaw.app.ui.mobileText
@@ -74,6 +84,47 @@ fun ChatComposer(
 ) {
   var input by rememberSaveable { mutableStateOf("") }
   var showThinkingMenu by remember { mutableStateOf(false) }
+
+  val context = LocalContext.current
+  val scope = rememberCoroutineScope()
+
+  // SpeechInputHelper instance, scoped to this composable's lifecycle
+  val speechHelper = remember { SpeechInputHelper(context, scope) }
+  val isListening by speechHelper.isListening.collectAsState()
+  val liveTranscript by speechHelper.transcript.collectAsState()
+
+  // Mirror live transcript into the text input field while listening
+  if (isListening && liveTranscript.isNotEmpty()) {
+    input = liveTranscript
+  }
+
+  // Wire up the silence-based auto-send callback
+  speechHelper.onSilenceTimeout = {
+    val text = input.trim()
+    if (text.isNotEmpty()) {
+      input = ""
+      speechHelper.clearTranscript()
+      onSend(text)
+    }
+  }
+
+  // Mic permission state + launcher (mirrors VoiceTabScreen pattern)
+  var hasMicPermission by remember { mutableStateOf(speechHelper.hasMicPermission()) }
+  var pendingMicStart by remember { mutableStateOf(false) }
+  val requestMicPermission = rememberLauncherForActivityResult(
+    ActivityResultContracts.RequestPermission()
+  ) { granted ->
+    hasMicPermission = granted
+    if (granted && pendingMicStart) {
+      speechHelper.start()
+    }
+    pendingMicStart = false
+  }
+
+  // Clean up recognizer when the composable leaves composition
+  DisposableEffect(Unit) {
+    onDispose { speechHelper.stop() }
+  }
 
   val canSend = pendingRunCount == 0 && (input.trim().isNotEmpty() || attachments.isNotEmpty()) && healthOk
   val sendBusy = pendingRunCount > 0
@@ -170,10 +221,55 @@ fun ChatComposer(
 
       Spacer(modifier = Modifier.weight(1f))
 
+      // ── Mic button (left of Send) ─────────────────────────────────────────
+      // Tap to start: streams partial results into input field.
+      // Silence (~2.5s of no transcript change) → auto-stop + auto-send.
+      // Manual tap while listening → stop only, text stays for review.
+      Button(
+        onClick = {
+          if (isListening) {
+            // Manual stop — leave transcript in field for review, no auto-send
+            speechHelper.stop()
+          } else {
+            if (hasMicPermission) {
+              speechHelper.clearTranscript()
+              speechHelper.start()
+            } else {
+              pendingMicStart = true
+              requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
+            }
+          }
+        },
+        enabled = healthOk || isListening,  // allow stopping even if health is bad
+        modifier = Modifier.size(44.dp),
+        shape = RoundedCornerShape(14.dp),
+        contentPadding = PaddingValues(0.dp),
+        colors = ButtonDefaults.buttonColors(
+          containerColor = if (isListening) mobileDanger else mobileCardSurface,
+          contentColor = if (isListening) Color.White else mobileTextSecondary,
+          disabledContainerColor = mobileCardSurface,
+          disabledContentColor = mobileTextTertiary,
+        ),
+        border = BorderStroke(
+          1.dp,
+          if (isListening) mobileDanger else mobileBorderStrong,
+        ),
+      ) {
+        Icon(
+          imageVector = if (isListening) Icons.Default.MicOff else Icons.Default.Mic,
+          contentDescription = if (isListening) "Stop dictation" else "Dictate message",
+          modifier = Modifier.size(18.dp),
+        )
+      }
+      // ─────────────────────────────────────────────────────────────────────
+
+      Spacer(modifier = Modifier.width(4.dp))
+
       Button(
         onClick = {
           val text = input
           input = ""
+          speechHelper.clearTranscript()
           onSend(text)
         },
         enabled = canSend,
