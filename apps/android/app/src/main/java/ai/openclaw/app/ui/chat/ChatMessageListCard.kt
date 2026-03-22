@@ -33,6 +33,7 @@ fun ChatMessageListCard(
   pendingToolCalls: List<ChatPendingToolCall>,
   streamingAssistantText: String?,
   healthOk: Boolean,
+  onSpeakMessage: ((String) -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
   val listState = rememberLazyListState()
@@ -79,7 +80,7 @@ fun ChatMessageListCard(
       }
 
       items(items = displayMessages, key = { it.id }) { message ->
-        ChatMessageBubble(message = message)
+        ChatMessageBubble(message = message, onSpeakMessage = onSpeakMessage)
       }
     }
 

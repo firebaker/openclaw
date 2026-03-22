@@ -26,6 +26,8 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -68,6 +70,7 @@ import ai.openclaw.app.ui.mobileSurface
 import ai.openclaw.app.ui.mobileText
 import ai.openclaw.app.ui.mobileTextSecondary
 import ai.openclaw.app.ui.mobileTextTertiary
+import ai.openclaw.app.ui.mobileWarning
 
 @Composable
 fun ChatComposer(
@@ -75,6 +78,8 @@ fun ChatComposer(
   thinkingLevel: String,
   pendingRunCount: Int,
   attachments: List<PendingImageAttachment>,
+  // TtsHelper is created in ChatSheetContent and passed in — not owned here.
+  ttsHelper: TtsHelper,
   onPickImages: () -> Unit,
   onRemoveAttachment: (id: String) -> Unit,
   onSetThinkingLevel: (level: String) -> Unit,
@@ -87,6 +92,9 @@ fun ChatComposer(
 
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
+
+  // TTS auto-read state (observed so the icon updates reactively)
+  val autoRead by ttsHelper.autoRead.collectAsState()
 
   // SpeechInputHelper instance, scoped to this composable's lifecycle
   val speechHelper = remember { SpeechInputHelper(context, scope) }
@@ -195,6 +203,7 @@ fun ChatComposer(
         }
       }
 
+      // ── Attach button ─────────────────────────────────────────────────────
       SecondaryActionButton(
         label = "Attach",
         icon = Icons.Default.AttachFile,
@@ -202,6 +211,33 @@ fun ChatComposer(
         compact = true,
         onClick = onPickImages,
       )
+
+      // ── TTS auto-read toggle (🔊/🔇) — next to Attach, in action row ─────
+      // Toggles whether new assistant messages are spoken aloud automatically.
+      Button(
+        onClick = { ttsHelper.toggleAutoRead() },
+        enabled = true,
+        modifier = Modifier.size(44.dp),
+        shape = RoundedCornerShape(14.dp),
+        contentPadding = PaddingValues(0.dp),
+        colors = ButtonDefaults.buttonColors(
+          containerColor = if (autoRead) mobileAccentSoft else mobileCardSurface,
+          contentColor = if (autoRead) mobileAccent else mobileTextSecondary,
+          disabledContainerColor = mobileCardSurface,
+          disabledContentColor = mobileTextTertiary,
+        ),
+        border = BorderStroke(
+          1.dp,
+          if (autoRead) mobileAccentBorderStrong else mobileBorderStrong,
+        ),
+      ) {
+        Icon(
+          imageVector = if (autoRead) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
+          contentDescription = if (autoRead) "Auto-read on — tap to mute" else "Auto-read off — tap to enable",
+          modifier = Modifier.size(18.dp),
+        )
+      }
+      // ─────────────────────────────────────────────────────────────────────
 
       SecondaryActionButton(
         label = "Refresh",

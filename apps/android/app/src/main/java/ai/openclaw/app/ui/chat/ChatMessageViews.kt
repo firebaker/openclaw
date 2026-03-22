@@ -11,6 +11,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -54,8 +58,17 @@ private data class ChatBubbleStyle(
   val roleColor: Color,
 )
 
+/**
+ * Renders a single chat message bubble.
+ *
+ * [onSpeakMessage] is an optional callback invoked with the plain text of the message when the
+ * user taps the per-message speaker icon. Only shown on assistant messages.
+ */
 @Composable
-fun ChatMessageBubble(message: ChatMessage) {
+fun ChatMessageBubble(
+  message: ChatMessage,
+  onSpeakMessage: ((String) -> Unit)? = null,
+) {
   val role = message.role.trim().lowercase(Locale.US)
   val style = bubbleStyle(role)
 
@@ -70,7 +83,24 @@ fun ChatMessageBubble(message: ChatMessage) {
 
   if (displayableContent.isEmpty()) return
 
-  ChatBubbleContainer(style = style, roleLabel = roleLabel(role)) {
+  // Extract plain text from all text parts (for TTS)
+  val plainText = remember(displayableContent) {
+    displayableContent
+      .filter { it.type == "text" }
+      .mapNotNull { it.text }
+      .joinToString("\n")
+  }
+
+  ChatBubbleContainer(
+    style = style,
+    roleLabel = roleLabel(role),
+    // Pass the speak callback only for assistant messages
+    onSpeakMessage = if (role == "assistant" && onSpeakMessage != null && plainText.isNotBlank()) {
+      { onSpeakMessage(plainText) }
+    } else {
+      null
+    },
+  ) {
     ChatMessageBody(content = displayableContent, textColor = mobileText)
   }
 }
@@ -80,6 +110,8 @@ private fun ChatBubbleContainer(
   style: ChatBubbleStyle,
   roleLabel: String,
   modifier: Modifier = Modifier,
+  // Non-null only for assistant bubbles with speakable content.
+  onSpeakMessage: (() -> Unit)? = null,
   content: @Composable () -> Unit,
 ) {
   Row(
@@ -98,11 +130,34 @@ private fun ChatBubbleContainer(
         modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
       ) {
-        Text(
-          text = roleLabel,
-          style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp),
-          color = style.roleColor,
-        )
+        // ── Header row: role label + optional per-message speak button ────
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+          Text(
+            text = roleLabel,
+            style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp),
+            color = style.roleColor,
+            modifier = Modifier.weight(1f),
+          )
+          // Speaker icon: only rendered when callback is provided (assistant bubbles only)
+          if (onSpeakMessage != null) {
+            IconButton(
+              onClick = onSpeakMessage,
+              modifier = Modifier.size(20.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Default.VolumeUp,
+                contentDescription = "Speak message",
+                modifier = Modifier.size(14.dp),
+                tint = mobileTextSecondary,
+              )
+            }
+          }
+        }
+        // ─────────────────────────────────────────────────────────────────
         content()
       }
     }

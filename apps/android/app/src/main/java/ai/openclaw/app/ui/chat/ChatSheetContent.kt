@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -69,6 +70,34 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val resolver = context.contentResolver
   val scope = rememberCoroutineScope()
 
+  // ── TTS: create once, tied to the sheet's lifecycle ──────────────────────
+  val ttsHelper = remember { TtsHelper(context) }
+  DisposableEffect(Unit) {
+    onDispose { ttsHelper.shutdown() }
+  }
+
+  // Auto-read: speak the latest assistant message when it arrives and autoRead is on.
+  // We track the last message id/index we spoke to avoid re-speaking on recomposition.
+  val lastMessageCount = remember { androidx.compose.runtime.mutableIntStateOf(0) }
+  LaunchedEffect(messages) {
+    val count = messages.size
+    if (count > lastMessageCount.intValue) {
+      lastMessageCount.intValue = count
+      val latest = messages.lastOrNull()
+      if (latest != null &&
+          latest.role.trim().lowercase() == "assistant" &&
+          ttsHelper.autoRead.value
+      ) {
+        val text = latest.content
+          .filter { it.type == "text" }
+          .mapNotNull { it.text }
+          .joinToString("\n")
+        if (text.isNotBlank()) ttsHelper.speak(text)
+      }
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   val attachments = remember { mutableStateListOf<PendingImageAttachment>() }
 
   val pickImages =
@@ -107,12 +136,17 @@ fun ChatSheetContent(viewModel: MainViewModel) {
       ChatErrorRail(errorText = errorText!!)
     }
 
+    // NOTE: ChatMessageListCard needs to accept and thread through `onSpeakMessage`.
+    // See patches/ChatMessageListCard.kt (if it exists) or apply the following change:
+    //   fun ChatMessageListCard(..., onSpeakMessage: ((String) -> Unit)? = null)
+    // and pass it down to each ChatMessageBubble call inside.
     ChatMessageListCard(
       messages = messages,
       pendingRunCount = pendingRunCount,
       pendingToolCalls = pendingToolCalls,
       streamingAssistantText = streamingAssistantText,
       healthOk = healthOk,
+      onSpeakMessage = { text -> ttsHelper.speak(text) },
       modifier = Modifier.weight(1f, fill = true),
     )
 
@@ -122,6 +156,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
         thinkingLevel = thinkingLevel,
         pendingRunCount = pendingRunCount,
         attachments = attachments,
+        ttsHelper = ttsHelper,
         onPickImages = { pickImages.launch("image/*") },
         onRemoveAttachment = { id -> attachments.removeAll { it.id == id } },
         onSetThinkingLevel = { level -> viewModel.setChatThinkingLevel(level) },
