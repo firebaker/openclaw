@@ -26,8 +26,8 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.VolumeOff
-import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -232,7 +232,7 @@ fun ChatComposer(
         ),
       ) {
         Icon(
-          imageVector = if (autoRead) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
+          imageVector = if (autoRead) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
           contentDescription = if (autoRead) "Auto-read on — tap to mute" else "Auto-read off — tap to enable",
           modifier = Modifier.size(18.dp),
         )

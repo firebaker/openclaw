@@ -43,10 +43,10 @@ class TtsHelper(context: Context) {
     }
 
     init {
+        @Suppress("OVERRIDE_DEPRECATION")
         engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?)  { _speaking.value = true  }
             override fun onDone(utteranceId: String?)   { _speaking.value = false }
-            @Deprecated("Required override", ReplaceWith("onError(utteranceId, errorCode)"))
             override fun onError(utteranceId: String?)  { _speaking.value = false }
         })
     }
