@@ -42,7 +42,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -91,8 +90,8 @@ fun ChatComposer(
   onRefresh: () -> Unit,
   onAbort: () -> Unit,
   onSend: (text: String) -> Unit,
-  // Called when a silence-timeout-triggered run finishes — parent speaks the latest message.
-  onAutoSpeak: (() -> Unit)? = null,
+  // Called when a silence-timeout auto-send fires — parent sets a flag to speak the next response.
+  onAutoSilenceSend: (() -> Unit)? = null,
 ) {
   var input by rememberSaveable { mutableStateOf("") }
   var showThinkingMenu by remember { mutableStateOf(false) }
@@ -110,9 +109,6 @@ fun ChatComposer(
 
   // Whether the last send was triggered by silence timeout — drives auto-read.
   var lastSendWasAutoSilence by remember { mutableStateOf(false) }
-
-  // Track previous pendingRunCount to detect run completion.
-  val prevPendingRunCount = remember { mutableIntStateOf(pendingRunCount) }
 
   // Derive the unified 3-state voice button state.
   val voiceState = when {
@@ -134,17 +130,8 @@ fun ChatComposer(
       input = ""
       speechHelper.clearTranscript()
       lastSendWasAutoSilence = true
+      onAutoSilenceSend?.invoke()
       onSend(text)
-    }
-  }
-
-  // When a run finishes (pendingRunCount drops to 0) after an auto-silence send →
-  // trigger the parent to speak the latest assistant message.
-  LaunchedEffect(pendingRunCount) {
-    val prev = prevPendingRunCount.intValue
-    prevPendingRunCount.intValue = pendingRunCount
-    if (prev > 0 && pendingRunCount == 0 && lastSendWasAutoSilence) {
-      onAutoSpeak?.invoke()
     }
   }
 
