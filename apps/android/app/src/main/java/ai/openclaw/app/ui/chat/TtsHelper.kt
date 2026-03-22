@@ -11,24 +11,19 @@ import java.util.Locale
  * Lightweight wrapper around Android's built-in TextToSpeech engine.
  *
  * Why: centralise TTS init/teardown so the composable layer stays clean,
- * and expose reactive state (autoRead, speaking) that Compose can observe.
+ * and expose reactive state (speaking) that Compose can observe.
+ *
+ * Auto-read is no longer toggled here — it's driven by the `lastSendWasAutoSilence`
+ * flag in ChatComposer (silence-timeout auto-send → auto-speak the response).
  *
  * Usage:
  *   val tts = remember { TtsHelper(context) }
  *   DisposableEffect(Unit) { onDispose { tts.shutdown() } }
  *
- *   // auto-read every new assistant message:
- *   LaunchedEffect(lastAssistantMessage) {
- *       if (tts.autoRead.value) tts.speak(lastAssistantMessage)
- *   }
- *
  *   // per-message on-demand:
  *   IconButton(onClick = { tts.speak(message) }) { ... }
  */
 class TtsHelper(context: Context) {
-
-    private val _autoRead = MutableStateFlow(false)
-    val autoRead: StateFlow<Boolean> = _autoRead
 
     private val _speaking = MutableStateFlow(false)
     val speaking: StateFlow<Boolean> = _speaking
@@ -50,9 +45,6 @@ class TtsHelper(context: Context) {
             override fun onError(utteranceId: String?)  { _speaking.value = false }
         })
     }
-
-    /** Toggle the auto-read flag. */
-    fun toggleAutoRead() { _autoRead.value = !_autoRead.value }
 
     /**
      * Speak the given text aloud, stripping markdown first.

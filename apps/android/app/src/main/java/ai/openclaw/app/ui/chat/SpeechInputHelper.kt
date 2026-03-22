@@ -24,6 +24,10 @@ import kotlinx.coroutines.launch
  *
  * Silence detection is string-content based: only resets the timer when the transcript text
  * actually changes — not on every onPartialResults callback (which fires on noise too).
+ *
+ * Stop distinction:
+ *   - `stop()` is a manual stop (user tapped the button) — no auto-send
+ *   - `onSilenceTimeout` fires when silence is detected — caller should auto-send
  */
 class SpeechInputHelper(
     private val context: Context,
@@ -43,7 +47,7 @@ class SpeechInputHelper(
     private val _transcript = MutableStateFlow("")
     val transcript: StateFlow<String> = _transcript
 
-    /** Called when silence timeout fires — consumer should send the message. */
+    /** Called when silence timeout fires — consumer should auto-send the message. */
     var onSilenceTimeout: (() -> Unit)? = null
 
     private var recognizer: SpeechRecognizer? = null
@@ -76,7 +80,9 @@ class SpeechInputHelper(
     }
 
     /**
-     * Stop listening. Transcript is preserved — caller decides whether to send.
+     * Manual stop — user explicitly tapped the button.
+     * Transcript is preserved; caller decides whether to send.
+     * Does NOT trigger onSilenceTimeout.
      * Returns the current transcript text at time of stop.
      */
     fun stop(): String {

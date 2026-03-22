@@ -20,14 +20,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.automirrored.filled.VolumeOff
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -41,8 +39,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -66,11 +66,16 @@ import ai.openclaw.app.ui.mobileCaption1
 import ai.openclaw.app.ui.mobileCardSurface
 import ai.openclaw.app.ui.mobileDanger
 import ai.openclaw.app.ui.mobileHeadline
+import ai.openclaw.app.ui.mobileSuccess
+import ai.openclaw.app.ui.mobileSuccessSoft
 import ai.openclaw.app.ui.mobileSurface
 import ai.openclaw.app.ui.mobileText
 import ai.openclaw.app.ui.mobileTextSecondary
 import ai.openclaw.app.ui.mobileTextTertiary
 import ai.openclaw.app.ui.mobileWarning
+
+/** 3-state enum for the unified mic/speaker button. */
+private enum class VoiceState { IDLE, LISTENING, SPEAKING }
 
 @Composable
 fun ChatComposer(
@@ -86,6 +91,8 @@ fun ChatComposer(
   onRefresh: () -> Unit,
   onAbort: () -> Unit,
   onSend: (text: String) -> Unit,
+  // Called when a silence-timeout-triggered run finishes — parent speaks the latest message.
+  onAutoSpeak: (() -> Unit)? = null,
 ) {
   var input by rememberSaveable { mutableStateOf("") }
   var showThinkingMenu by remember { mutableStateOf(false) }
@@ -93,26 +100,58 @@ fun ChatComposer(
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
 
-  // TTS auto-read state (observed so the icon updates reactively)
-  val autoRead by ttsHelper.autoRead.collectAsState()
+  // TTS speaking state (observed so the unified button updates reactively)
+  val isSpeaking by ttsHelper.speaking.collectAsState()
 
   // SpeechInputHelper instance, scoped to this composable's lifecycle
   val speechHelper = remember { SpeechInputHelper(context, scope) }
   val isListening by speechHelper.isListening.collectAsState()
   val liveTranscript by speechHelper.transcript.collectAsState()
 
-  // Mirror live transcript into the text input field while listening
+  // Whether the last send was triggered by silence timeout — drives auto-read.
+  var lastSendWasAutoSilence by remember { mutableStateOf(false) }
+
+  // Track previous pendingRunCount to detect run completion.
+  val prevPendingRunCount = remember { mutableIntStateOf(pendingRunCount) }
+
+  // Derive the unified 3-state voice button state.
+  val voiceState = when {
+    isSpeaking -> VoiceState.SPEAKING
+    isListening -> VoiceState.LISTENING
+    else -> VoiceState.IDLE
+  }
+
+  // Mirror live transcript into the text input field while listening.
   if (isListening && liveTranscript.isNotEmpty()) {
     input = liveTranscript
   }
 
-  // Wire up the silence-based auto-send callback
+  // Wire up the silence-based auto-send callback.
+  // This is the only path that sets lastSendWasAutoSilence = true.
   speechHelper.onSilenceTimeout = {
     val text = input.trim()
     if (text.isNotEmpty()) {
       input = ""
       speechHelper.clearTranscript()
+      lastSendWasAutoSilence = true
       onSend(text)
+    }
+  }
+
+  // When a run finishes (pendingRunCount drops to 0) after an auto-silence send →
+  // trigger the parent to speak the latest assistant message.
+  LaunchedEffect(pendingRunCount) {
+    val prev = prevPendingRunCount.intValue
+    prevPendingRunCount.intValue = pendingRunCount
+    if (prev > 0 && pendingRunCount == 0 && lastSendWasAutoSilence) {
+      onAutoSpeak?.invoke()
+    }
+  }
+
+  // When TTS finishes naturally → clear the autoSilence flag (voice returns to IDLE).
+  LaunchedEffect(isSpeaking) {
+    if (!isSpeaking) {
+      lastSendWasAutoSilence = false
     }
   }
 
@@ -137,6 +176,16 @@ fun ChatComposer(
   val canSend = pendingRunCount == 0 && (input.trim().isNotEmpty() || attachments.isNotEmpty()) && healthOk
   val sendBusy = pendingRunCount > 0
 
+  // Text field border color: green when LISTENING, normal otherwise.
+  val textFieldBorderFocused = when (voiceState) {
+    VoiceState.LISTENING -> mobileSuccess
+    else -> mobileAccent
+  }
+  val textFieldBorderUnfocused = when (voiceState) {
+    VoiceState.LISTENING -> mobileSuccess
+    else -> mobileBorder
+  }
+
   Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     if (attachments.isNotEmpty()) {
       AttachmentsStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
@@ -151,14 +200,17 @@ fun ChatComposer(
       maxLines = 5,
       textStyle = mobileBodyStyle().copy(color = mobileText),
       shape = RoundedCornerShape(14.dp),
-      colors = chatTextFieldColors(),
+      colors = chatTextFieldColors(
+        focusedBorder = textFieldBorderFocused,
+        unfocusedBorder = textFieldBorderUnfocused,
+      ),
     )
 
     if (!healthOk) {
       Text(
         text = "Gateway is offline. Connect first in the Connect tab.",
         style = mobileCallout,
-        color = ai.openclaw.app.ui.mobileWarning,
+        color = mobileWarning,
       )
     }
 
@@ -212,33 +264,7 @@ fun ChatComposer(
         onClick = onPickImages,
       )
 
-      // ── TTS auto-read toggle (🔊/🔇) — next to Attach, in action row ─────
-      // Toggles whether new assistant messages are spoken aloud automatically.
-      Button(
-        onClick = { ttsHelper.toggleAutoRead() },
-        enabled = true,
-        modifier = Modifier.size(44.dp),
-        shape = RoundedCornerShape(14.dp),
-        contentPadding = PaddingValues(0.dp),
-        colors = ButtonDefaults.buttonColors(
-          containerColor = if (autoRead) mobileAccentSoft else mobileCardSurface,
-          contentColor = if (autoRead) mobileAccent else mobileTextSecondary,
-          disabledContainerColor = mobileCardSurface,
-          disabledContentColor = mobileTextTertiary,
-        ),
-        border = BorderStroke(
-          1.dp,
-          if (autoRead) mobileAccentBorderStrong else mobileBorderStrong,
-        ),
-      ) {
-        Icon(
-          imageVector = if (autoRead) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
-          contentDescription = if (autoRead) "Auto-read on — tap to mute" else "Auto-read off — tap to enable",
-          modifier = Modifier.size(18.dp),
-        )
-      }
-      // ─────────────────────────────────────────────────────────────────────
-
+      // ── Refresh button ────────────────────────────────────────────────────
       SecondaryActionButton(
         label = "Refresh",
         icon = Icons.Default.Refresh,
@@ -247,6 +273,7 @@ fun ChatComposer(
         onClick = onRefresh,
       )
 
+      // ── Abort button ──────────────────────────────────────────────────────
       SecondaryActionButton(
         label = "Abort",
         icon = Icons.Default.Stop,
@@ -257,43 +284,73 @@ fun ChatComposer(
 
       Spacer(modifier = Modifier.weight(1f))
 
-      // ── Mic button (left of Send) ─────────────────────────────────────────
-      // Tap to start: streams partial results into input field.
-      // Silence (~2.5s of no transcript change) → auto-stop + auto-send.
-      // Manual tap while listening → stop only, text stays for review.
+      // ── Unified 3-state mic/speaker button ────────────────────────────────
+      // IDLE:      Mic icon, secondary color      → tap starts listening
+      // LISTENING: Mic icon in RED (mobileDanger) → tap stops manually (no auto-send/auto-read)
+      // SPEAKING:  VolumeUp icon in GREEN, green bg → tap stops TTS
       Button(
         onClick = {
-          if (isListening) {
-            // Manual stop — leave transcript in field for review, no auto-send
-            speechHelper.stop()
-          } else {
-            if (hasMicPermission) {
-              speechHelper.clearTranscript()
-              speechHelper.start()
-            } else {
-              pendingMicStart = true
-              requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
+          when (voiceState) {
+            VoiceState.IDLE -> {
+              if (hasMicPermission) {
+                speechHelper.clearTranscript()
+                speechHelper.start()
+              } else {
+                pendingMicStart = true
+                requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
+              }
+            }
+            VoiceState.LISTENING -> {
+              // Manual stop — leave transcript for editing, no auto-read on next response
+              lastSendWasAutoSilence = false
+              speechHelper.stop()
+            }
+            VoiceState.SPEAKING -> {
+              // Stop TTS — voice returns to IDLE naturally as isSpeaking goes false
+              ttsHelper.stop()
             }
           }
         },
-        enabled = healthOk || isListening,  // allow stopping even if health is bad
+        enabled = when (voiceState) {
+          VoiceState.IDLE -> healthOk
+          VoiceState.LISTENING, VoiceState.SPEAKING -> true  // always allow stopping
+        },
         modifier = Modifier.size(44.dp),
         shape = RoundedCornerShape(14.dp),
         contentPadding = PaddingValues(0.dp),
         colors = ButtonDefaults.buttonColors(
-          containerColor = if (isListening) mobileDanger else mobileCardSurface,
-          contentColor = if (isListening) Color.White else mobileTextSecondary,
+          containerColor = when (voiceState) {
+            VoiceState.IDLE -> mobileCardSurface
+            VoiceState.LISTENING -> mobileCardSurface
+            VoiceState.SPEAKING -> mobileSuccessSoft
+          },
+          contentColor = when (voiceState) {
+            VoiceState.IDLE -> mobileTextSecondary
+            VoiceState.LISTENING -> mobileDanger
+            VoiceState.SPEAKING -> mobileSuccess
+          },
           disabledContainerColor = mobileCardSurface,
           disabledContentColor = mobileTextTertiary,
         ),
         border = BorderStroke(
           1.dp,
-          if (isListening) mobileDanger else mobileBorderStrong,
+          when (voiceState) {
+            VoiceState.IDLE -> mobileBorderStrong
+            VoiceState.LISTENING -> mobileDanger
+            VoiceState.SPEAKING -> mobileSuccess
+          },
         ),
       ) {
         Icon(
-          imageVector = if (isListening) Icons.Default.MicOff else Icons.Default.Mic,
-          contentDescription = if (isListening) "Stop dictation" else "Dictate message",
+          imageVector = when (voiceState) {
+            VoiceState.IDLE, VoiceState.LISTENING -> Icons.Default.Mic
+            VoiceState.SPEAKING -> Icons.AutoMirrored.Filled.VolumeUp
+          },
+          contentDescription = when (voiceState) {
+            VoiceState.IDLE -> "Start dictation"
+            VoiceState.LISTENING -> "Stop dictation"
+            VoiceState.SPEAKING -> "Stop speaking"
+          },
           modifier = Modifier.size(18.dp),
         )
       }
@@ -301,11 +358,13 @@ fun ChatComposer(
 
       Spacer(modifier = Modifier.width(4.dp))
 
+      // ── Send button ───────────────────────────────────────────────────────
       Button(
         onClick = {
           val text = input
           input = ""
           speechHelper.clearTranscript()
+          lastSendWasAutoSilence = false  // manual send never triggers auto-read
           onSend(text)
         },
         enabled = canSend,
@@ -460,12 +519,15 @@ private fun AttachmentChip(fileName: String, onRemove: () -> Unit) {
 }
 
 @Composable
-private fun chatTextFieldColors() =
+private fun chatTextFieldColors(
+  focusedBorder: Color = mobileAccent,
+  unfocusedBorder: Color = mobileBorder,
+) =
   OutlinedTextFieldDefaults.colors(
     focusedContainerColor = mobileSurface,
     unfocusedContainerColor = mobileSurface,
-    focusedBorderColor = mobileAccent,
-    unfocusedBorderColor = mobileBorder,
+    focusedBorderColor = focusedBorder,
+    unfocusedBorderColor = unfocusedBorder,
     focusedTextColor = mobileText,
     unfocusedTextColor = mobileText,
     cursorColor = mobileAccent,

@@ -45,6 +45,7 @@ import ai.openclaw.app.ui.mobileCodeBg
 import ai.openclaw.app.ui.mobileCodeBorder
 import ai.openclaw.app.ui.mobileCodeText
 import ai.openclaw.app.ui.mobileHeadline
+import ai.openclaw.app.ui.mobileSuccess
 import ai.openclaw.app.ui.mobileText
 import ai.openclaw.app.ui.mobileTextSecondary
 import ai.openclaw.app.ui.mobileWarning
@@ -61,13 +62,19 @@ private data class ChatBubbleStyle(
 /**
  * Renders a single chat message bubble.
  *
- * [onSpeakMessage] is an optional callback invoked with the plain text of the message when the
- * user taps the per-message speaker icon. Only shown on assistant messages.
+ * [onSpeakMessage] is an optional callback invoked when the user taps the per-message speaker
+ * icon. Only shown on assistant messages. When [isSpeaking] is true, tapping the icon stops TTS
+ * instead of starting it (the icon doubles as a stop control).
+ *
+ * [isSpeaking] should be true whenever TTS is actively playing any message — the parent passes
+ * this down from TtsHelper.speaking so the icon reflects global TTS state.
  */
 @Composable
 fun ChatMessageBubble(
   message: ChatMessage,
   onSpeakMessage: ((String) -> Unit)? = null,
+  isSpeaking: Boolean = false,
+  onStopSpeaking: (() -> Unit)? = null,
 ) {
   val role = message.role.trim().lowercase(Locale.US)
   val style = bubbleStyle(role)
@@ -94,12 +101,20 @@ fun ChatMessageBubble(
   ChatBubbleContainer(
     style = style,
     roleLabel = roleLabel(role),
-    // Pass the speak callback only for assistant messages
-    onSpeakMessage = if (role == "assistant" && onSpeakMessage != null && plainText.isNotBlank()) {
-      { onSpeakMessage(plainText) }
+    // Pass the speak/stop callback only for assistant messages
+    onSpeakMessage = if (role == "assistant" && plainText.isNotBlank() &&
+      (onSpeakMessage != null || onStopSpeaking != null)
+    ) {
+      if (isSpeaking) {
+        // Bubble icon acts as stop when TTS is active
+        onStopSpeaking?.let { { it() } }
+      } else {
+        onSpeakMessage?.let { speak -> { speak(plainText) } }
+      }
     } else {
       null
     },
+    isSpeaking = isSpeaking,
   ) {
     ChatMessageBody(content = displayableContent, textColor = mobileText)
   }
@@ -112,6 +127,8 @@ private fun ChatBubbleContainer(
   modifier: Modifier = Modifier,
   // Non-null only for assistant bubbles with speakable content.
   onSpeakMessage: (() -> Unit)? = null,
+  // When true, the speaker icon is tinted green to indicate active playback.
+  isSpeaking: Boolean = false,
   content: @Composable () -> Unit,
 ) {
   Row(
@@ -130,7 +147,7 @@ private fun ChatBubbleContainer(
         modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
       ) {
-        // ── Header row: role label + optional per-message speak button ────
+        // ── Header row: role label + optional per-message speak/stop button ─
         Row(
           modifier = Modifier.fillMaxWidth(),
           verticalAlignment = Alignment.CenterVertically,
@@ -142,7 +159,8 @@ private fun ChatBubbleContainer(
             color = style.roleColor,
             modifier = Modifier.weight(1f),
           )
-          // Speaker icon: only rendered when callback is provided (assistant bubbles only)
+          // Speaker/stop icon: only rendered when callback is provided (assistant bubbles only).
+          // Tinted green when TTS is currently playing — tap to stop.
           if (onSpeakMessage != null) {
             IconButton(
               onClick = onSpeakMessage,
@@ -150,9 +168,9 @@ private fun ChatBubbleContainer(
             ) {
               Icon(
                 imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                contentDescription = "Speak message",
+                contentDescription = if (isSpeaking) "Stop speaking" else "Speak message",
                 modifier = Modifier.size(14.dp),
-                tint = mobileTextSecondary,
+                tint = if (isSpeaking) mobileSuccess else mobileTextSecondary,
               )
             }
           }

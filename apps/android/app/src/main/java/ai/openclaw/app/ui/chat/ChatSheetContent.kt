@@ -76,26 +76,12 @@ fun ChatSheetContent(viewModel: MainViewModel) {
     onDispose { ttsHelper.shutdown() }
   }
 
-  // Auto-read: speak the latest assistant message when it arrives and autoRead is on.
-  // We track the last message id/index we spoke to avoid re-speaking on recomposition.
-  val lastMessageCount = remember { androidx.compose.runtime.mutableIntStateOf(0) }
-  LaunchedEffect(messages) {
-    val count = messages.size
-    if (count > lastMessageCount.intValue) {
-      lastMessageCount.intValue = count
-      val latest = messages.lastOrNull()
-      if (latest != null &&
-          latest.role.trim().lowercase() == "assistant" &&
-          ttsHelper.autoRead.value
-      ) {
-        val text = latest.content
-          .filter { it.type == "text" }
-          .mapNotNull { it.text }
-          .joinToString("\n")
-        if (text.isNotBlank()) ttsHelper.speak(text)
-      }
-    }
-  }
+  // Observe TTS speaking state to pass down to message bubbles (play/stop toggle).
+  val isSpeaking by ttsHelper.speaking.collectAsState()
+
+  // Auto-read is now handled inside ChatComposer via the lastSendWasAutoSilence flag.
+  // When silence-timeout auto-send fires and the run finishes, ChatComposer calls onAutoSpeak,
+  // which speaks the latest assistant message here in the parent (where messages are accessible).
   // ─────────────────────────────────────────────────────────────────────────
 
   val attachments = remember { mutableStateListOf<PendingImageAttachment>() }
@@ -136,10 +122,6 @@ fun ChatSheetContent(viewModel: MainViewModel) {
       ChatErrorRail(errorText = errorText!!)
     }
 
-    // NOTE: ChatMessageListCard needs to accept and thread through `onSpeakMessage`.
-    // See patches/ChatMessageListCard.kt (if it exists) or apply the following change:
-    //   fun ChatMessageListCard(..., onSpeakMessage: ((String) -> Unit)? = null)
-    // and pass it down to each ChatMessageBubble call inside.
     ChatMessageListCard(
       messages = messages,
       pendingRunCount = pendingRunCount,
@@ -147,6 +129,8 @@ fun ChatSheetContent(viewModel: MainViewModel) {
       streamingAssistantText = streamingAssistantText,
       healthOk = healthOk,
       onSpeakMessage = { text -> ttsHelper.speak(text) },
+      isSpeaking = isSpeaking,
+      onStopSpeaking = { ttsHelper.stop() },
       modifier = Modifier.weight(1f, fill = true),
     )
 
@@ -177,6 +161,17 @@ fun ChatSheetContent(viewModel: MainViewModel) {
             }
           viewModel.sendChat(message = text, thinking = thinkingLevel, attachments = outgoing)
           attachments.clear()
+        },
+        // Auto-speak the latest assistant message after a silence-timeout send completes.
+        onAutoSpeak = {
+          val latest = messages.lastOrNull { it.role.trim().lowercase() == "assistant" }
+          if (latest != null) {
+            val text = latest.content
+              .filter { it.type == "text" }
+              .mapNotNull { it.text }
+              .joinToString("\n")
+            if (text.isNotBlank()) ttsHelper.speak(text)
+          }
         },
       )
     }

@@ -34,6 +34,10 @@ fun ChatMessageListCard(
   streamingAssistantText: String?,
   healthOk: Boolean,
   onSpeakMessage: ((String) -> Unit)? = null,
+  // Whether TTS is currently playing — threaded down to bubble icons (play/stop toggle).
+  isSpeaking: Boolean = false,
+  // Called when a bubble's speaker icon is tapped while TTS is active (stop action).
+  onStopSpeaking: (() -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
   val listState = rememberLazyListState()
@@ -80,7 +84,12 @@ fun ChatMessageListCard(
       }
 
       items(items = displayMessages, key = { it.id }) { message ->
-        ChatMessageBubble(message = message, onSpeakMessage = onSpeakMessage)
+        ChatMessageBubble(
+          message = message,
+          onSpeakMessage = onSpeakMessage,
+          isSpeaking = isSpeaking,
+          onStopSpeaking = onStopSpeaking,
+        )
       }
     }
 
