@@ -28,17 +28,54 @@ fun friendlySessionName(key: String): String {
   return result.ifBlank { key }
 }
 
-fun resolveSessionChoices(
+/** System/background session key patterns that belong in the overflow bucket. */
+private val OVERFLOW_PATTERNS = listOf(
+  "heartbeat",
+  "cron",
+  "memory",
+  "ready-report",
+  "system",
+  "automated",
+  "schedule",
+)
+
+/**
+ * Classify a session key as overflow (system/background) or primary (user-facing).
+ * Returns true if the session belongs in the overflow bucket.
+ */
+fun isOverflowSession(key: String): Boolean {
+  val lower = key.lowercase()
+  return OVERFLOW_PATTERNS.any { pattern -> lower.contains(pattern) }
+}
+
+/**
+ * Grouped session lists for the 4-pill thread selector.
+ * [primary] contains user-facing sessions (agent:main:main pinned first).
+ * [overflow] contains system/background sessions.
+ */
+data class GroupedSessions(
+  val primary: List<ChatSessionEntry>,
+  val overflow: List<ChatSessionEntry>,
+)
+
+/**
+ * Resolve all sessions into primary and overflow groups.
+ * The main session is always pinned at the top of primary.
+ * Deduplicates by key and filters to recently-active sessions.
+ */
+fun resolveGroupedSessions(
   currentSessionKey: String,
   sessions: List<ChatSessionEntry>,
   mainSessionKey: String,
   nowMs: Long = System.currentTimeMillis(),
-): List<ChatSessionEntry> {
+): GroupedSessions {
   val mainKey = mainSessionKey.trim().ifEmpty { "main" }
   val current = currentSessionKey.trim().let { if (it == "main" && mainKey != "main") mainKey else it }
   val aliasKey = if (mainKey == "main") null else "main"
   val cutoff = nowMs - RECENT_WINDOW_MS
   val sorted = sessions.sortedByDescending { it.updatedAtMs ?: 0L }
+
+  // Deduplicate and filter to recent
   val recent = mutableListOf<ChatSessionEntry>()
   val seen = mutableSetOf<String>()
   for (entry in sorted) {
@@ -48,26 +85,54 @@ fun resolveSessionChoices(
     recent.add(entry)
   }
 
-  val result = mutableListOf<ChatSessionEntry>()
+  // Ensure main and current session are always present
+  val all = mutableListOf<ChatSessionEntry>()
   val included = mutableSetOf<String>()
+
   val mainEntry = sorted.firstOrNull { it.key == mainKey }
   if (mainEntry != null) {
-    result.add(mainEntry)
+    all.add(mainEntry)
     included.add(mainKey)
   } else if (current == mainKey) {
-    result.add(ChatSessionEntry(key = mainKey, updatedAtMs = null))
+    all.add(ChatSessionEntry(key = mainKey, updatedAtMs = null))
     included.add(mainKey)
   }
 
   for (entry in recent) {
     if (included.add(entry.key)) {
-      result.add(entry)
+      all.add(entry)
     }
   }
 
   if (current.isNotEmpty() && !included.contains(current)) {
-    result.add(ChatSessionEntry(key = current, updatedAtMs = null))
+    all.add(ChatSessionEntry(key = current, updatedAtMs = null))
   }
 
-  return result
+  // Split into primary (main pinned first) and overflow
+  val primary = mutableListOf<ChatSessionEntry>()
+  val overflow = mutableListOf<ChatSessionEntry>()
+
+  for (entry in all) {
+    if (entry.key == mainKey) {
+      // Main always goes to primary, pinned at position 0
+      primary.add(0, entry)
+    } else if (isOverflowSession(entry.key)) {
+      overflow.add(entry)
+    } else {
+      primary.add(entry)
+    }
+  }
+
+  return GroupedSessions(primary = primary, overflow = overflow)
+}
+
+// Keep the old function for backward compatibility
+fun resolveSessionChoices(
+  currentSessionKey: String,
+  sessions: List<ChatSessionEntry>,
+  mainSessionKey: String,
+  nowMs: Long = System.currentTimeMillis(),
+): List<ChatSessionEntry> {
+  val grouped = resolveGroupedSessions(currentSessionKey, sessions, mainSessionKey, nowMs)
+  return grouped.primary + grouped.overflow
 }
