@@ -3,6 +3,7 @@ package ai.openclaw.app.ui.chat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,30 +11,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -46,6 +35,7 @@ import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileAccentBorderStrong
+import ai.openclaw.app.ui.mobileBorder
 import ai.openclaw.app.ui.mobileBorderStrong
 import ai.openclaw.app.ui.mobileCallout
 import ai.openclaw.app.ui.mobileCardSurface
@@ -160,9 +150,6 @@ fun ChatSheetContent(viewModel: MainViewModel) {
       sessions = sessions,
       mainSessionKey = mainSessionKey,
       onSelectSession = { key -> viewModel.switchChatSession(key) },
-      onCreateSession = { name ->
-        viewModel.switchChatSession(name)
-      },
     )
 
     if (!errorText.isNullOrBlank()) {
@@ -227,213 +214,37 @@ private fun ChatThreadSelector(
   sessions: List<ChatSessionEntry>,
   mainSessionKey: String,
   onSelectSession: (String) -> Unit,
-  onCreateSession: (String) -> Unit,
 ) {
-  val grouped =
+  val sessionOptions =
     remember(sessionKey, sessions, mainSessionKey) {
-      resolveGroupedSessions(sessionKey, sessions, mainSessionKey = mainSessionKey)
+      resolveSessionChoices(sessionKey, sessions, mainSessionKey = mainSessionKey)
     }
-
-  var showCreateDialog by remember { mutableStateOf(false) }
-  var showPrimaryMenu by remember { mutableStateOf(false) }
-  var showOverflowMenu by remember { mutableStateOf(false) }
 
   Row(
-    modifier = Modifier.fillMaxWidth(),
+    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
     horizontalArrangement = Arrangement.spacedBy(8.dp),
-    verticalAlignment = Alignment.CenterVertically,
   ) {
-    // 1. Active session pill (accent colors)
-    Surface(
-      shape = RoundedCornerShape(14.dp),
-      color = mobileAccent,
-      border = BorderStroke(1.dp, mobileAccentBorderStrong),
-      tonalElevation = 0.dp,
-      shadowElevation = 0.dp,
-    ) {
-      Text(
-        text = friendlySessionName(sessionKey),
-        style = mobileCaption1.copy(fontWeight = FontWeight.Bold),
-        color = Color.White,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-      )
-    }
-
-    // 2. "+" pill — create new session
-    Surface(
-      onClick = { showCreateDialog = true },
-      shape = RoundedCornerShape(14.dp),
-      color = mobileCardSurface,
-      border = BorderStroke(1.dp, mobileBorderStrong),
-      tonalElevation = 0.dp,
-      shadowElevation = 0.dp,
-    ) {
-      Icon(
-        imageVector = Icons.Default.Add,
-        contentDescription = "New session",
-        tint = mobileText,
-        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-      )
-    }
-
-    // 3. Primary ▾ pill — dropdown for user-facing sessions
-    SessionDropdownPill(
-      label = "Primary",
-      entries = grouped.primary,
-      activeKey = sessionKey,
-      expanded = showPrimaryMenu,
-      onToggle = { showPrimaryMenu = !showPrimaryMenu },
-      onDismiss = { showPrimaryMenu = false },
-      onSelect = { key ->
-        showPrimaryMenu = false
-        onSelectSession(key)
-      },
-    )
-
-    // 4. Overflow ▾ pill — only shown when there are system sessions
-    if (grouped.overflow.isNotEmpty()) {
-      SessionDropdownPill(
-        label = "System",
-        entries = grouped.overflow,
-        activeKey = sessionKey,
-        expanded = showOverflowMenu,
-        onToggle = { showOverflowMenu = !showOverflowMenu },
-        onDismiss = { showOverflowMenu = false },
-        onSelect = { key ->
-          showOverflowMenu = false
-          onSelectSession(key)
-        },
-      )
-    }
-  }
-
-  // Create session dialog
-  if (showCreateDialog) {
-    CreateSessionDialog(
-      onDismiss = { showCreateDialog = false },
-      onCreate = { name ->
-        showCreateDialog = false
-        onCreateSession(name)
-      },
-    )
-  }
-}
-
-/** A pill with a dropdown chevron that opens a menu of session entries. */
-@Composable
-private fun SessionDropdownPill(
-  label: String,
-  entries: List<ChatSessionEntry>,
-  activeKey: String,
-  expanded: Boolean,
-  onToggle: () -> Unit,
-  onDismiss: () -> Unit,
-  onSelect: (String) -> Unit,
-) {
-  // Wrap in a Box-like scope so DropdownMenu anchors correctly
-  androidx.compose.foundation.layout.Box {
-    Surface(
-      onClick = onToggle,
-      shape = RoundedCornerShape(14.dp),
-      color = mobileCardSurface,
-      border = BorderStroke(1.dp, mobileBorderStrong),
-      tonalElevation = 0.dp,
-      shadowElevation = 0.dp,
-    ) {
-      Row(
-        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    for (entry in sessionOptions) {
+      val active = entry.key == sessionKey
+      Surface(
+        onClick = { onSelectSession(entry.key) },
+        shape = RoundedCornerShape(14.dp),
+        color = if (active) mobileAccent else mobileCardSurface,
+        border = BorderStroke(1.dp, if (active) mobileAccentBorderStrong else mobileBorderStrong),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
       ) {
         Text(
-          text = label,
-          style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
-          color = mobileText,
+          text = friendlySessionName(entry.displayName ?: entry.key),
+          style = mobileCaption1.copy(fontWeight = if (active) FontWeight.Bold else FontWeight.SemiBold),
+          color = if (active) Color.White else mobileText,
           maxLines = 1,
-        )
-        Icon(
-          imageVector = Icons.Default.KeyboardArrowDown,
-          contentDescription = null,
-          tint = mobileTextSecondary,
-          modifier = Modifier.padding(0.dp),
-        )
-      }
-    }
-
-    DropdownMenu(
-      expanded = expanded,
-      onDismissRequest = onDismiss,
-      modifier = Modifier.widthIn(min = 180.dp),
-    ) {
-      for (entry in entries) {
-        val name = friendlySessionName(entry.displayName ?: entry.key)
-        val isActive = entry.key == activeKey
-        DropdownMenuItem(
-          text = {
-            Text(
-              text = name,
-              style = mobileCaption1.copy(
-                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-              ),
-              color = if (isActive) mobileAccent else mobileText,
-            )
-          },
-          onClick = { onSelect(entry.key) },
-        )
-      }
-      if (entries.isEmpty()) {
-        DropdownMenuItem(
-          text = {
-            Text(
-              text = "No sessions",
-              style = mobileCaption1,
-              color = mobileTextSecondary,
-            )
-          },
-          onClick = {},
-          enabled = false,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
         )
       }
     }
   }
-}
-
-/** Simple dialog to create a new named session. */
-@Composable
-private fun CreateSessionDialog(
-  onDismiss: () -> Unit,
-  onCreate: (String) -> Unit,
-) {
-  var sessionName by remember { mutableStateOf("") }
-
-  AlertDialog(
-    onDismissRequest = onDismiss,
-    title = { Text("New Session", style = mobileCallout, color = mobileText) },
-    text = {
-      OutlinedTextField(
-        value = sessionName,
-        onValueChange = { sessionName = it },
-        label = { Text("Session name") },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-      )
-    },
-    confirmButton = {
-      TextButton(
-        onClick = { onCreate(sessionName.trim()) },
-        enabled = sessionName.isNotBlank(),
-      ) {
-        Text("Create")
-      }
-    },
-    dismissButton = {
-      TextButton(onClick = onDismiss) {
-        Text("Cancel")
-      }
-    },
-  )
 }
 
 @Composable
